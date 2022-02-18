@@ -18,13 +18,9 @@ const uint8_t FADE_FAST = 8;
 const uint8_t FADE_MID = 24;
 const uint8_t FADE_SLOW = 64;
 
-const uint8_t QUEUE_SIZE = 16;
+const uint8_t QUEUE_SIZE = 24;
 
 uint32_t seed;
-uint32_t lastDebounce;
-uint32_t lastClic;
-bool btnLastState;
-bool btnChange;
 
 uint8_t testValue;
 
@@ -75,6 +71,10 @@ uint8_t mode;
 volatile bool overflow;
 uint16_t overflowCounter;
 uint8_t fadeSpeed;
+uint32_t lastClic;
+bool justWake;
+
+PushButton btn;
 
 // Interrupt service routine for PCINT, on which the button pin is the only one activated.
 // simply disable sleep. Program then resumes where the sleep was launch.
@@ -146,16 +146,16 @@ void initSystem(){
 	pinMode(PIN_LED2, OUTPUT);
 	pinMode(PIN_LED4, OUTPUT);
 	pinMode(PIN_LED6, OUTPUT);
-	pinMode(PIN_BTN, INPUT_PULLUP);
+	
+	btn.begin(PIN_BTN, INPUT_PULLUP);
+	justWake = true;
 
-	// Init delays references
-	lastClic = lastDebounce = millis();
-	btnLastState = digitalRead(PIN_BTN);
 
 	// Init State
 	pinState = 0;
 	overflow = false;
 	overflowCounter = 0;
+	lastClic = millis();
 
 	// Timer setting for led dimming
 	TCCR1A = /*(1 << CS13) | */(1 << CS12) | (1 << CS11) | (1 << CS10);
@@ -311,27 +311,6 @@ void launchDice(){
 	}
 }
 
-// Debounce button.
-// TODO : add long press for menu options.
-bool debounceButton(uint32_t now){
-
-	bool btnNow = digitalRead(PIN_BTN);
-
-
-	if(btnNow != btnLastState){
-		btnLastState = btnNow;
-		lastDebounce = now;
-		btnChange = true;
-	}
-
-	if(btnChange && !btnNow && (now - lastDebounce) > 2){
-		btnChange = false;
-		return true;
-	}
-
-	return false;
-}
-
 // Test sleep against given time.
 bool testSleep(uint32_t now){
 	if((now - lastClic) > SLEEP_DELAY) return true;
@@ -364,18 +343,8 @@ void sleeping(){
 
 // Loop for dice mode.
 void loopDice(){
-	uint32_t now = millis();
-
-	// If the button is clicked, we launch a new sequence.
-	if(debounceButton(now)){
-		emptyQueue();
-		launchDice();
-		lastClic = now;
-	}
-
 	// If timing is over, then the system is put to sleep.
-	if(testSleep(now)){
-		fadeSpeed = FADE_SLOW;
+	if(testSleep(millis())){
 		fadeOut(FADE_SLOW);
 		goToSleep();
 		// Here we wake from sleep.
@@ -385,15 +354,6 @@ void loopDice(){
 
 // Loop for pulse mode.
 void loopPulse(){
-	uint32_t now = millis();
-
-	if(debounceButton(now)){
-//		mode = MODE_DICE;
-//		emptyQueue();
-		goToSleep();
-		lastClic = now;
-	}
-
 	if(stateQueueRead->state != IDLE) return;
 
 	displayNumber(xorshift(6) + 1);
@@ -407,14 +367,6 @@ void loopPulse(){
 
 // Loop for demo mode.
 void loopDemo(){
-	uint32_t now = millis();
-
-	if(debounceButton(now)){
-//		emptyQueue();
-		goToSleep();
-		lastClic = now;
-	}
-
 	if(stateQueueRead->state != IDLE) return;
 
 //	displayNumber(xorshift(6) + 1);
@@ -424,12 +376,62 @@ void loopDemo(){
 	fadeOut(xorshift(32));
 }
 
+void handleButton(){
+	lastClic = millis();
+
+	if(btn.isLongPressed()){
+		if(justWake){
+			justWake = false;
+			return;
+		}	
+
+		// handle long press : change mode
+		mode++;
+		if(mode > MODE_DEMO) mode = MODE_DICE;
+		emptyQueue();
+		fadeOut(0);
+		displayNumber(mode);
+		for(uint8_t i = 0; i < 4; ++i){
+/*			
+			fadeIn(4);
+			wait(200);
+			fadeOut(4);
+			wait(300);
+*/
+			pinState = mode + 1;
+			OCR1A = 0;
+			delay(200);
+			OCR1A = 255;
+			delay(300);
+		}
+	} else if(btn.justReleased()){
+		switch(mode){
+			case MODE_DEMO:
+			case MODE_PULSE:
+				if(justWake){
+					justWake = false;
+					return;
+				}	
+				emptyQueue();
+				fadeOut();
+				goToSleep();
+				break;
+			case MODE_DICE:
+				emptyQueue();
+				launchDice();
+				break;
+			default:
+				break;
+		}
+	}
+}
+
 // Initialisation. The bulk is needed on each wake-up, and is in a dedicated function. Queue is initialized only once, here.
 void setup(){
 	// Very first thing to do, before any variable initilization : reading RAM for seed generation.
 	makeSeed();
 
-	mode = MODE_DEMO;
+	mode = MODE_PULSE;
 
 	// Initializaing the display queue.
 	state_t *queue = new state_t[QUEUE_SIZE];
@@ -451,6 +453,8 @@ void setup(){
 }
 
 void loop(){
+	if(btn.update()) handleButton();
+
 	switch(stateQueueRead->state){
 		case FADE:
 			dimming();
