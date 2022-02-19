@@ -43,7 +43,7 @@ enum{
 };
 
 // Structures for different states, to be inserted into the global state structure.
-struct wait_t{
+struct queueWait_t{
 	uint16_t delay;
 	uint32_t start;
 };
@@ -59,7 +59,7 @@ struct state_t{
 	volatile uint8_t state;
 	union{
 		fade_t fade;
-		wait_t wait;
+		queueWait_t queueWait;
 		uint8_t value;
 	};
 };
@@ -148,6 +148,8 @@ void initSystem(){
 	pinMode(PIN_LED6, OUTPUT);
 	
 	btn.begin(PIN_BTN, INPUT_PULLUP);
+	btn.update();
+	btn.justReleased();
 	justWake = true;
 
 
@@ -158,7 +160,7 @@ void initSystem(){
 	lastClic = millis();
 
 	// Timer setting for led dimming
-	TCCR1A = /*(1 << CS13) | */(1 << CS12) | (1 << CS11) | (1 << CS10);
+	TCCR1A = /*(1 << CS13) | */(1 << CS12)/* | (1 << CS11)*/ | (1 << CS10);
 	GTCCR = 0;
 	OCR1A = 255;
 	TIMSK |= (1 << OCIE1A) | (1 << TOIE1);
@@ -189,7 +191,7 @@ void emptyQueue(){
 }
 
 // Add a number to the queue.
-void displayNumber(uint8_t output){
+void queueNumber(uint8_t output){
 	bool isPar = 0;
 	isPar = output % 2;
 /*
@@ -224,7 +226,7 @@ void displayClear(){
 }
 
 // Add a fade-in to the queue.
-void fadeIn(uint8_t speed = FADE_FAST){
+void queueFadeIn(uint8_t speed = FADE_FAST){
 	state_t *s = stateQueueWrite;
 	s->state = FADE;
 	s->fade.direction = -1;
@@ -234,7 +236,7 @@ void fadeIn(uint8_t speed = FADE_FAST){
 }
 
 // Add a fade-out to the queue.
-void fadeOut(uint8_t speed = FADE_FAST){
+void queueFadeOut(uint8_t speed = FADE_FAST){
 	state_t *s = stateQueueWrite;
 	s->state = FADE;
 	s->fade.direction = +1;
@@ -244,16 +246,16 @@ void fadeOut(uint8_t speed = FADE_FAST){
 }
 
 // Add a delay to the queue.
-void wait(uint16_t delay){
+void queueWait(uint16_t delay){
 	state_t *s = stateQueueWrite;
 	s->state = WAIT;
-	s->wait.delay = delay;
-	s->wait.start = 0;
+	s->queueWait.delay = delay;
+	s->queueWait.start = 0;
 	stateQueueWrite = s->next;
 }
 
 // Add a sleep to the queue.
-void goToSleep(){
+void queueSleep(){
 	state_t *s = stateQueueWrite;
 	s->state = SLEEP;
 	stateQueueWrite = s->next;
@@ -273,15 +275,15 @@ void dimming(){
 	}
 }
 
-// Handle waiting state.
+// Handle queueWaiting state.
 void waiting(){
 	state_t *s = stateQueueRead;
 
 	uint32_t now = millis();
 
-	if(s->wait.start == 0) s->wait.start = now;
+	if(s->queueWait.start == 0) s->queueWait.start = now;
 
-	if((now - s->wait.start) > s->wait.delay){
+	if((now - s->queueWait.start) > s->queueWait.delay){
 		s->state = IDLE;
 		stateQueueRead = s->next;
 	}
@@ -299,16 +301,20 @@ void changing(){
 
 // Launch a new dice. Queue several fade-out / new number / fade-in.
 void launchDice(){
+	emptyQueue();
 	for(uint8_t i = 0; i < 3; ++i){
 //		uint8_t result = random(6) + 1;
 		uint8_t result = 0;
 //		result = random(6) + 1;
 //		result = (rand() * 6) / (RAND_MAX + 1);
 		result = xorshift(6) + 1;
-		fadeOut(FADE_FAST);
-		displayNumber(result);
-		fadeIn(FADE_FAST);
+		queueFadeOut(FADE_FAST);
+		queueNumber(result);
+		queueFadeIn(FADE_FAST);
 	}
+	queueWait(6000);
+	queueFadeOut(FADE_SLOW);
+	queueSleep();
 }
 
 // Test sleep against given time.
@@ -344,59 +350,61 @@ void sleeping(){
 // Loop for dice mode.
 void loopDice(){
 	// If timing is over, then the system is put to sleep.
+/*
 	if(testSleep(millis())){
-		fadeOut(FADE_SLOW);
-		goToSleep();
+		queueFadeOut(FADE_SLOW);
+		queueSleep();
 		// Here we wake from sleep.
 		lastClic = millis();
 	}
+*/
 }
 
 // Loop for pulse mode.
 void loopPulse(){
 	if(stateQueueRead->state != IDLE) return;
 
-	displayNumber(xorshift(6) + 1);
+	queueNumber(xorshift(6) + 1);
 
-	fadeIn(FADE_MID);
-	wait(500);
+	queueFadeIn(FADE_MID);
+	queueWait(400);
 
-	fadeOut(FADE_SLOW);
-	wait(5000);
+	queueFadeOut(FADE_SLOW);
+	queueWait(2000);
 }
 
 // Loop for demo mode.
 void loopDemo(){
 	if(stateQueueRead->state != IDLE) return;
 
-//	displayNumber(xorshift(6) + 1);
+//	queueNumber(xorshift(6) + 1);
 	// Here we don't care if the display is a dice, we just wanna blink ; any combinaison is ok, and we directly change pinState instead of queueing.
 	pinState = xorshift(16);
-	fadeIn(xorshift(32));
-	fadeOut(xorshift(32));
+	queueFadeIn(xorshift(32));
+	queueFadeOut(xorshift(32));
 }
 
 void handleButton(){
 	lastClic = millis();
 
 	if(btn.isLongPressed()){
-		if(justWake){
+/*		if(justWake){
 			justWake = false;
 			return;
 		}	
-
+*/
 		// handle long press : change mode
 		mode++;
 		if(mode > MODE_DEMO) mode = MODE_DICE;
 		emptyQueue();
-		fadeOut(0);
-		displayNumber(mode);
+		queueFadeOut(0);
+		queueNumber(mode);
 		for(uint8_t i = 0; i < 4; ++i){
 /*			
-			fadeIn(4);
-			wait(200);
-			fadeOut(4);
-			wait(300);
+			queueFadeIn(4);
+			queueWait(200);
+			queueFadeOut(4);
+			queueWait(300);
 */
 			pinState = mode + 1;
 			OCR1A = 0;
@@ -404,17 +412,17 @@ void handleButton(){
 			OCR1A = 255;
 			delay(300);
 		}
-	} else if(btn.justReleased()){
+	} else if(!btn.justLongClicked() && btn.justReleased()){
 		switch(mode){
 			case MODE_DEMO:
 			case MODE_PULSE:
-				if(justWake){
+/*				if(justWake){
 					justWake = false;
 					return;
 				}	
-				emptyQueue();
-				fadeOut();
-				goToSleep();
+*/				emptyQueue();
+				queueFadeOut();
+				queueSleep();
 				break;
 			case MODE_DICE:
 				emptyQueue();
@@ -431,7 +439,7 @@ void setup(){
 	// Very first thing to do, before any variable initilization : reading RAM for seed generation.
 	makeSeed();
 
-	mode = MODE_PULSE;
+	mode = MODE_DICE;
 
 	// Initializaing the display queue.
 	state_t *queue = new state_t[QUEUE_SIZE];
