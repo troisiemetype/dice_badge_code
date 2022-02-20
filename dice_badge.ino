@@ -1,4 +1,5 @@
 #include "avr/sleep.h"
+#include "avr/wdt.h"
 
 const uint16_t SRAM_START = 0x000;		// SRAM start is 0x60, but registers can be used as well, some have undecided reset value.
 const uint16_t SRAM_END = 0x25F;		// 0x0DF, 0x15F, 0x25F for Attiny 25, 45, 85 resp.
@@ -58,12 +59,18 @@ struct fade_t{
 	bool comp;
 };
 
+struct sleep_t{
+	int16_t delay;
+	bool shortSleep;
+};
+
 struct state_t{
 	state_t *next;
 	volatile uint8_t state;
 	union{
 		fade_t fade;
 		wait_t wait;
+		sleep_t sleep;
 		uint8_t value;
 	};
 };
@@ -75,6 +82,9 @@ uint8_t mode;
 volatile bool overflow;
 volatile uint32_t overflowCounter;
 uint8_t fadeSpeed;
+
+volatile uint8_t wdCounter;
+volatile bool btnWake;
 
 struct buttonState_t{
 	uint32_t lastChange;
@@ -88,11 +98,19 @@ struct buttonState_t{
 	bool ignore : 1;
 } btn;
 
+// Interrupt service routine for watchdog timer.
+ISR(WDT_vect){
+	--wdCounter;
+	btnWake = false;
+}
+
 // Interrupt service routine for PCINT, on which the button pin is the only one activated.
 // simply disable sleep. Program then resumes where the sleep was launch.
 // Also disable interrupt on button pin, we don't want it to fire each time the button is pressed.
+// Todo : this last point seems to pose a problem, as when the interrupt is disabled, the button no longer works.
 ISR(PCINT0_vect){
-	MCUCR &= ~(1 << SE);
+	btnWake = true;
+//	MCUCR &= ~(1 << SE);
 //	GIMSK &= ~(1 << PCIE);
 }
 
@@ -135,8 +153,8 @@ void disablePeripherals(){
 	MCUCR |= (1 << BODS);
 	MCUCR &= (1 << BODSE);
 	// Disable watchdog timer
-	WDTCR |= (1 << WDCE);
-	WDTCR &= (1 << WDE);
+	WDTCR |= (1 << WDCE) | (1 << WDE);
+	WDTCR &= ~(1 << WDE);
 }
 
 // Read uninitialized RAM values to generate a seed that is different on every startup and on every board.
@@ -290,9 +308,12 @@ void queueDelay(uint16_t delay){
 }
 
 // Add a sleep to the queue.
-void queueSleep(){
-	queueIn->state = SLEEP;
-	queueIn = queueIn->next;
+void queueSleep(uint16_t delay = 0){
+	state_t *s = queueIn;
+	s->state = SLEEP;
+	s->sleep.delay = delay;
+	s->sleep.shortSleep = (delay != 0)?true:false;
+	queueIn = s->next;
 }
 
 // Handle dimming state.
@@ -360,8 +381,25 @@ void sleeping(){
 
 	if(s->state != SLEEP) return;
 
+	sleep_t sleepState = s->sleep;
+	
 	s->state = IDLE;
 	queueOut = s->next;
+
+	// Let's test for a delay : if delay is 0, we want to sleep, but if it's different we want to wake up in a few moments
+	if(sleepState.shortSleep){
+		// Clear reset source register
+		MCUSR = 0;
+		// Clear pending interrupt flags, enable disabling reset.
+		WDTCR |= (1 << WDIF) | (1 << WDCE) | (1 << WDE);
+		// disable the watchdog reset
+		WDTCR &= ~(1 << WDE);
+		// Enable wadtchdog interrupt, 16k (125ms) prescale
+		WDTCR |= (1 << WDIE) | (1 << WDP1) | (1 << WDP0);
+		// compute the number of wake up needed. (florred to 125ms)
+		wdCounter = sleepState.delay / 125;
+		wdt_reset();
+	}
 
 	// First enable interrupt on button (pin 4)
 	GIMSK |= (1 << PCIE);
@@ -376,7 +414,22 @@ void sleeping(){
 	deinitSystem();
 	
 	//Finally launch sleep
-	sleep_mode();
+	for(;;){
+		sleep_cpu();
+
+		if(btnWake){
+			break;
+		} else {
+			if(wdCounter != 0){
+				WDTCR |= (1 << WDIE);
+			} else {
+				break;
+			}
+		}
+	}
+//	wdt_disable();
+	WDTCR &= ~(1 << WDIE);
+	MCUCR &= ~(1 << SE);
 
 	initSystem();
 
@@ -385,9 +438,23 @@ void sleeping(){
 		case MODE_DICE:
 			break;
 		default:
-			btn.ignore = true;
+			// When the cpu is woke up after a pause (short sleep), we have to account for button press, so the mode can be changed.
+			if(sleepState.shortSleep){
+				btn.now = btn.prev = !digitalRead(PIN_BTN);
+				btn.lastChange = millis() - 1;				
+			} else {
+				// When we wake up from deep sleep, we don't want to hear from the button, except in dice mode.
+				btn.ignore = true;
+			}
 			break;
 	}
+}
+
+void goDeepSleep(){
+
+}
+
+void goPause(){
 
 }
 
@@ -422,7 +489,8 @@ void loopPulse(){
 	queueDelay(500);
 
 	queueFadeOut(FADE_SLOW);
-	queueDelay(2500);
+//	queueDelay(2500);
+	queueSleep(3000);
 }
 
 // Loop for heartbeat mode.
@@ -436,8 +504,8 @@ void loopHeartBeat(){
 	queueFadeIn(FADE_FAST, 140);
 	queueFadeOut(FADE_SLOW);
 
-	queueDelay(1200);
-
+//	queueDelay(1200);
+	queueSleep(1250);
 }
 
 // Loop for demo mode.
@@ -550,7 +618,7 @@ void setup(){
 	// Very first thing to do, before any variable initilization : reading RAM for seed generation.
 	makeSeed();
 
-	mode = MODE_DICE;
+	mode = MODE_PULSE;
 
 	// Initializaing the display queue.
 	state_t *queue = new state_t[QUEUE_SIZE];
