@@ -247,6 +247,7 @@ void queueNumber(uint8_t output){
 	queueIn = s->next;
 }
 
+// Not used. Fade out to the trick.
 void displayClear(){
 /*
 	digitalWrite(PIN_LED1, 0);
@@ -390,12 +391,16 @@ void sleeping(){
 
 }
 
-// Launch a new dice. Queue several fade-out / new number / fade-in.
-void launchDice(){
-	for(uint8_t i = 0; i < 3; ++i){
-		queueFadeOut(FADE_FAST);
+// Launch a new dice. Queue several fade-out / new number / fade-in. The number of numbers appearring before stopping is random, as well as speed.
+void throwDice(){
+	uint8_t limit = xorshift(4) + 3;
+	uint8_t speed = 4;
+
+	for(uint8_t i = 0; i < limit; ++i){
+		queueFadeOut(speed);
 		queueNumber(xorshift(6) + 1);
-		queueFadeIn(FADE_FAST);
+		queueFadeIn(speed);
+		speed += xorshift(4);
 	}
 	queueDelay(5000);
 	queueFadeOut(FADE_SLOW);
@@ -404,7 +409,7 @@ void launchDice(){
 
 // Loop for dice mode.
 void loopDice(){
-
+	// Empty, all is handled in queue.
 }
 
 // Loop for pulse mode.
@@ -414,10 +419,10 @@ void loopPulse(){
 	queueNumber(xorshift(6) + 1);
 
 	queueFadeIn(FADE_MID);
-	queueDelay(400);
+	queueDelay(500);
 
 	queueFadeOut(FADE_SLOW);
-	queueDelay(2000);
+	queueDelay(2500);
 }
 
 // Loop for heartbeat mode.
@@ -492,18 +497,22 @@ void updateButton(){
 	}	
 */
 	if(btn.changed){
+		// Clear the button change flag.
 		btn.changed = false;
 		
 		if(btn.longState){
+			// Clear the ignore tag (set when waking up in ertain modes).
 			if(btn.ignore){
 				btn.ignore = false;
 				return;
 			}
-	
+			// change mode, loop back if needed.
 			if(++mode > MODE_DEMO) mode = MODE_DICE;
+			// Empty queue, then fade out to give a smooth animation from whatever was displayed.
 			emptyQueue();
 			queueFadeOut(FADE_XFAST);
 			queueNumber(mode + 1);
+			// Blink 3 times the number according to new mode.
 			for(uint8_t i = 0; i < 3; ++i){
 				queueFadeIn(FADE_XFAST);
 				queueDelay(50);
@@ -521,6 +530,7 @@ void updateButton(){
 				case MODE_DEMO:
 				case MODE_HEARTBEAT:
 				case MODE_PULSE:
+					// In those three modes, when the nbutton is simple-pressed, the dice goes to sleep.
 					emptyQueue();
 					queueFadeOut(FADE_MID);
 					queueSleep();
@@ -528,7 +538,7 @@ void updateButton(){
 				case MODE_DICE:
 				default:
 					emptyQueue();
-					launchDice();
+					throwDice();
 					break;
 			}
 		}
@@ -561,6 +571,7 @@ void setup(){
 	initSystem();
 }
 
+// Main loop. Only dispatch to dedicated functions here.
 void loop(){
 	updateButton();
 
