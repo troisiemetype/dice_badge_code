@@ -386,7 +386,7 @@ void sleeping(){
 	s->state = IDLE;
 	queueOut = s->next;
 
-	// Let's test for a delay : if delay is 0, we want to sleep, but if it's different we want to wake up in a few moments
+	// Let's test for a delay : if delay is 0, we want to sleep, but if it's set we want to wake up in a few moments
 	if(sleepState.shortSleep){
 		// Clear reset source register
 		MCUSR = 0;
@@ -450,15 +450,7 @@ void sleeping(){
 	}
 }
 
-void goDeepSleep(){
-
-}
-
-void goPause(){
-
-}
-
-// Launch a new dice. Queue several fade-out / new number / fade-in. The number of numbers appearring before stopping is random, as well as speed.
+// Launch a new dice. Queue several fade-out / new number / fade-in. The number of numbers appearring before stopping is random, speed goes decreasing.
 void throwDice(){
 	uint8_t limit = xorshift(4) + 3;
 	uint8_t speed = 4;
