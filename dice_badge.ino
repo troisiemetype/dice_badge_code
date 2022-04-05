@@ -1,3 +1,21 @@
+/*
+ * This Arduino sketch is a dice badge.
+ * Copyright (C) 2022  Pierre-Loup Martin
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 #include "avr/sleep.h"
 #include "avr/wdt.h"
 
@@ -42,7 +60,9 @@ enum{
 enum{
 	MODE_DICE = 0,
 	MODE_HEARTBEAT,
+	MODE_HEARTBEAT_SLOW,
 	MODE_PULSE,
+	MODE_PULSE_SLOW,
 	MODE_DEMO,
 };
 
@@ -450,6 +470,17 @@ void sleeping(){
 	}
 }
 
+// This function is called at the end of setup, and lights-up every led.
+// It's as much as if the dice wakes up, and a convenient way to verify all the leds are ok after fab.
+void birth(){
+	pinState = 0b1111;
+	queueFadeIn(FADE_SLOW);
+	queueDelay(1000);
+	queueFadeOut(FADE_FAST);
+	queueFadeIn(FADE_FAST);
+	queueFadeOut(FADE_MID);
+}
+
 // Launch a new dice. Queue several fade-out / new number / fade-in. The number of numbers appearring before stopping is random, speed goes decreasing.
 void throwDice(){
 	uint8_t limit = xorshift(4) + 3;
@@ -481,8 +512,9 @@ void loopPulse(){
 	queueDelay(500);
 
 	queueFadeOut(FADE_SLOW);
-//	queueDelay(2500);
 	queueSleep(3000);
+	if(mode == MODE_PULSE_SLOW) queueSleep(3000);
+
 }
 
 // Loop for heartbeat mode.
@@ -496,8 +528,8 @@ void loopHeartBeat(){
 	queueFadeIn(FADE_FAST, 140);
 	queueFadeOut(FADE_SLOW);
 
-//	queueDelay(1200);
 	queueSleep(1250);
+	if(mode == MODE_HEARTBEAT_SLOW) queueSleep(3000);
 }
 
 // Loop for demo mode.
@@ -522,7 +554,7 @@ void updateButton(){
 	// Check if there is a difference, so we can reinit the button timer.
 	if(btn.now != btn.prev){
 		btn.lastChange = now;
-		return false;
+		return;
 	}
 
 	// We check for debounce.
@@ -589,8 +621,10 @@ void updateButton(){
 			switch (mode){
 				case MODE_DEMO:
 				case MODE_HEARTBEAT:
+				case MODE_HEARTBEAT_SLOW:
 				case MODE_PULSE:
-					// In those three modes, when the nbutton is simple-pressed, the dice goes to sleep.
+				case MODE_PULSE_SLOW:
+					// In those modes, when the button is simple-pressed, the dice goes to sleep.
 					emptyQueue();
 					queueFadeOut(FADE_MID);
 					queueSleep();
@@ -610,7 +644,7 @@ void setup(){
 	// Very first thing to do, before any variable initilization : reading RAM for seed generation.
 	makeSeed();
 
-	mode = MODE_PULSE;
+	mode = MODE_DICE;
 
 	// Initializaing the display queue.
 	state_t *queue = new state_t[QUEUE_SIZE];
@@ -629,6 +663,8 @@ void setup(){
 
 	// call for wake-up and reset settings.
 	initSystem();
+
+	birth();
 }
 
 // Main loop. Only dispatch to dedicated functions here.
@@ -658,9 +694,11 @@ void loop(){
 			loopDemo();
 			break;
 		case MODE_HEARTBEAT:
+		case MODE_HEARTBEAT_SLOW:
 			loopHeartBeat();
 			break;
 		case MODE_PULSE:
+		case MODE_PULSE_SLOW:
 			loopPulse();
 			break;
 		case MODE_DICE:
