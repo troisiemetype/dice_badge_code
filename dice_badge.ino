@@ -41,6 +41,15 @@ const uint8_t QUEUE_SIZE = 24;
 const uint8_t DEBOUNCE_DELAY = 1;
 const uint16_t LONG_DELAY = 800;
 
+/*
+ * With all leds lit, and green leds, current consumption is :
+ * 			22,7mA with a max duty cycle of 0
+ *			15,9mA with a max duty cycle of 128
+ */
+
+const uint8_t MAX_DUTY_CYCLE = 128;
+const uint8_t MIN_DUTY_CYCLE = 255;
+
 uint32_t seed;
 
 uint8_t testValue;
@@ -297,7 +306,9 @@ void displayClear(){
 }
 
 // Add a fade-in to the queue.
-void queueFadeIn(uint8_t duration = FADE_FAST, uint8_t limit = 0){
+// Setting the maximum value to 128 instead of 0 (PWM out is reversed) gives a half max duty cycle :
+// It limits the curent consumption, almost without change to the eye.
+void queueFadeIn(uint8_t duration = FADE_FAST, uint8_t limit = MAX_DUTY_CYCLE){
 	state_t *s = queueIn;
 	s->state = FADE;
 	s->fade.direction = -1;
@@ -308,7 +319,7 @@ void queueFadeIn(uint8_t duration = FADE_FAST, uint8_t limit = 0){
 }
 
 // Add a fade-out to the queue.
-void queueFadeOut(uint8_t duration = FADE_FAST, uint8_t limit = 255){
+void queueFadeOut(uint8_t duration = FADE_FAST, uint8_t limit = MIN_DUTY_CYCLE){
 	state_t *s = queueIn;
 	s->state = FADE;
 	s->fade.direction = +1;
@@ -416,7 +427,7 @@ void sleeping(){
 		WDTCR &= ~(1 << WDE);
 		// Enable wadtchdog interrupt, 16k (125ms) prescale
 		WDTCR |= (1 << WDIE) | (1 << WDP1) | (1 << WDP0);
-		// compute the number of wake up needed. (florred to 125ms)
+		// compute the number of wake up needed. (floored to 125ms)
 		wdCounter = sleepState.delay / 125;
 		wdt_reset();
 	}
@@ -479,6 +490,7 @@ void birth(){
 	queueFadeOut(FADE_FAST);
 	queueFadeIn(FADE_FAST);
 	queueFadeOut(FADE_MID);
+	queueSleep();
 }
 
 // Launch a new dice. Queue several fade-out / new number / fade-in. The number of numbers appearring before stopping is random, speed goes decreasing.
