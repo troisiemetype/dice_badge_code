@@ -31,10 +31,11 @@ const uint8_t PIN_BTN = 4;
 // Sleep delay in ms. How long will the dice display its number before to go to sleep.
 const uint16_t SLEEP_DELAY = 8000;
 
-const uint8_t FADE_XFAST = 2;
-const uint8_t FADE_FAST = 8;
-const uint8_t FADE_MID = 20;
-const uint8_t FADE_SLOW = 80;
+// Fades are in ms too. Converted to PWM cycles in code, and rounded to suit timer overflow frequency
+const uint16_t FADE_XFAST = 50;
+const uint16_t FADE_FAST = 150;
+const uint16_t FADE_MID = 500;
+const uint16_t FADE_SLOW = 1500;
 
 const uint8_t QUEUE_SIZE = 24;
 
@@ -164,9 +165,9 @@ ISR(TIMER1_COMPA_vect){
 
 void quickBlink(uint8_t time = 1){
 	for(uint8_t i = 0; i < time; ++i){
-		OCR1A = 0;
+		OCR1A = MAX_DUTY_CYCLE;
 		delay(50);
-		OCR1A = 255;
+		OCR1A = MIN_DUTY_CYCLE;
 		delay(150);
 	}
 }
@@ -228,11 +229,12 @@ void initSystem(){
 
 	// Timer setting for led dimming
 	cli();
-	TCCR1 = /*(1 << CS13) | (1 << CS12) | */(1 << CS11) | (1 << CS10);
-	GTCCR = (1 << PSR1);
-	TCNT1 = 0;
-	OCR1A = 255;
-	TIMSK |= (1 << OCIE1A) | (1 << TOIE1);
+//	TCCR1 = /*(1 << CS13) | (1 << CS12) |*/ (1 << CS11) | (1 << CS10);		// clock / 4
+	TCCR1 = (1 << CS12);													// clock / 8
+	GTCCR = (1 << PSR1);													// prescaler reset
+	TCNT1 = 0;																// Start counter at 0
+	OCR1A = MIN_DUTY_CYCLE;													// default value is led off
+	TIMSK |= (1 << OCIE1A) | (1 << TOIE1);									// enable compare match 1 and overflow interrupts
 
 	sei();
 
@@ -308,7 +310,7 @@ void displayClear(){
 // Add a fade-in to the queue.
 // Setting the maximum value to 128 instead of 0 (PWM out is reversed) gives a half max duty cycle :
 // It limits the curent consumption, almost without change to the eye.
-void queueFadeIn(uint8_t duration = FADE_FAST, uint8_t limit = MAX_DUTY_CYCLE){
+void queueFadeIn(uint16_t duration = FADE_FAST, uint8_t limit = MAX_DUTY_CYCLE){
 	state_t *s = queueIn;
 	s->state = FADE;
 	s->fade.direction = -1;
@@ -319,7 +321,7 @@ void queueFadeIn(uint8_t duration = FADE_FAST, uint8_t limit = MAX_DUTY_CYCLE){
 }
 
 // Add a fade-out to the queue.
-void queueFadeOut(uint8_t duration = FADE_FAST, uint8_t limit = MIN_DUTY_CYCLE){
+void queueFadeOut(uint16_t duration = FADE_FAST, uint8_t limit = MIN_DUTY_CYCLE){
 	state_t *s = queueIn;
 	s->state = FADE;
 	s->fade.direction = +1;
@@ -357,12 +359,13 @@ void fading(){
 		overflowCounter = 0;
 		overflow = false;
 		s->fade.comp = false;
-/*
-		uint16_t counter = F_CPU / (1000 * 4 * abs(((int16_t)OCR1A - s->fade.limit)));
-		s->fade.duration *= counter;
-		s->fade.comp = false;
-		overflowCounter = 0;
-*/
+
+		uint32_t counter = F_CPU / (256 * (1 << ((TCCR1 & 0b1111) - 1)));	// Timer overflow frequency
+		counter *= s->fade.duration;
+		counter /= 1000;
+		counter /= abs((int16_t)OCR1A - (int16_t)s->fade.limit);			// steps for this fade
+		s->fade.duration = counter;
+
 	}
 
 	if(overflow){
@@ -485,6 +488,7 @@ void sleeping(){
 // It's as much as if the dice wakes up, and a convenient way to verify all the leds are ok after fab.
 void birth(){
 	pinState = 0b1111;
+//	queueFadeIn(FADE_FAST);
 	queueFadeIn(FADE_SLOW);
 	queueDelay(1000);
 	queueFadeOut(FADE_FAST);
@@ -496,13 +500,13 @@ void birth(){
 // Launch a new dice. Queue several fade-out / new number / fade-in. The number of numbers appearring before stopping is random, speed goes decreasing.
 void throwDice(){
 	uint8_t limit = xorshift(4) + 3;
-	uint8_t speed = 4;
+	uint16_t speed = FADE_FAST;
 
 	for(uint8_t i = 0; i < limit; ++i){
 		queueFadeOut(speed);
 		queueNumber(xorshift(6) + 1);
 		queueFadeIn(speed);
-		speed += xorshift(4);
+		speed += xorshift(FADE_XFAST);
 	}
 	queueDelay(5000);
 	queueFadeOut(FADE_SLOW);
@@ -551,8 +555,8 @@ void loopDemo(){
 //	queueNumber(xorshift(6) + 1);
 	// Here we don't care if the display is a dice, we just wanna blink ; any combinaison is ok, and we directly change pinState instead of queueing.
 	pinState = xorshift(15) + 1;
-	queueFadeIn(xorshift(32));
-	queueFadeOut(xorshift(32));
+	queueFadeIn(xorshift(FADE_SLOW));
+	queueFadeOut(xorshift(FADE_SLOW));
 }
 
 void updateButton(){
